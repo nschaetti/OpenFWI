@@ -1,1 +1,1 @@
-./fva_data3.npy	./fva_velocity3.npy
+./data/FlatVel_A/data/data3.npy	./data/FlatVel_A/model/model3.npy

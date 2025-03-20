@@ -16,6 +16,7 @@
 
 # others to do so.
 
+# Imports
 import os
 import numpy as np
 from torch.utils.data import Dataset
@@ -23,7 +24,8 @@ from torchvision.transforms import Compose
 import transforms as T
 
 class FWIDataset(Dataset):
-    ''' FWI dataset
+    """
+    FWI dataset
     For convenience, in this class, a batch refers to a npy file 
     instead of the batch used during training.
 
@@ -33,7 +35,8 @@ class FWIDataset(Dataset):
         sample_ratio: downsample ratio for seismic data
         file_size: # of samples in each npy file
         transform_data|label: transformation applied to data or label
-    '''
+    """
+
     def __init__(self, anno, preload=True, sample_ratio=1, file_size=500,
                     transform_data=None, transform_label=None):
         if not os.path.exists(anno):
@@ -52,6 +55,10 @@ class FWIDataset(Dataset):
                 self.data_list.append(data)
                 if label is not None:
                     self.label_list.append(label)
+                # end if
+            # end for
+        # end if
+    # end __init__
 
     # Load from one line
     def load_every(self, batch):
@@ -86,6 +93,8 @@ class FWIDataset(Dataset):
     def __len__(self):
         return len(self.batches) * self.file_size
 
+# end FWIDataset
+
 
 if __name__ == '__main__':
     transform_data = Compose([
@@ -99,3 +108,4 @@ if __name__ == '__main__':
     data, label = dataset[0]
     print(data.shape)
     print(label is None)
+# end if __name__

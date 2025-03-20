@@ -30,6 +30,15 @@ import itertools
 from torchvision.models import vgg16
 import numpy as np
 
+from rich.console import Console
+from rich.traceback import install
+from rich.progress import Progress, BarColumn, TimeRemainingColumn
+from rich.table import Table
+
+# Setup rich
+console = Console()
+
+
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
@@ -170,13 +179,13 @@ class MetricLogger(object):
                 eta_seconds = iter_time.global_avg * (length - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
-                    print(log_msg.format(
+                    console.log(log_msg.format(
                         i, length, eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time),
                         memory=torch.cuda.max_memory_allocated() / MB))
                 else:
-                    print(log_msg.format(
+                    console.log(log_msg.format(
                         i, length, eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
@@ -184,7 +193,7 @@ class MetricLogger(object):
             end = time.time()
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        print('{} Total time: {}'.format(header, total_time_str))
+        console.log('{} Total time: {}'.format(header, total_time_str))
 
 
 # Legacy code
@@ -380,7 +389,7 @@ def init_distributed_mode(args):
     elif hasattr(args, "rank"):
         pass
     else:
-        print('Not using distributed mode')
+        console.log('Not using distributed mode')
         args.distributed = False
         return
 
@@ -388,7 +397,7 @@ def init_distributed_mode(args):
 
     torch.cuda.set_device(args.local_rank)
     args.dist_backend = 'nccl'
-    print('| distributed init (rank {}): {}'.format(
+    console.log('| distributed init (rank {}): {}'.format(
         args.rank, args.dist_url), flush=True)
     torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                          world_size=args.world_size, rank=args.rank)

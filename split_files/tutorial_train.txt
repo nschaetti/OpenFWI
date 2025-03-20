@@ -1,2 +1,2 @@
-./fva_data1.npy	./fva_velocity1.npy
-./fva_data2.npy	./fva_velocity2.npy
+./data/FlatVel_A/data/data1.npy	./data/FlatVel_A/model/model1.npy
+./data/FlatVel_A/data/data2.npy	./data/FlatVel_A/model/model2.npy

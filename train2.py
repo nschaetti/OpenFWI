@@ -1,4 +1,3 @@
-
 # © 2022. Triad National Security, LLC. All rights reserved.
 # This program was produced under U.S. Government contract 89233218CNA000001 for Los Alamos
 # National Laboratory (LANL), which is operated by Triad National Security, LLC for the U.S.
@@ -33,7 +32,17 @@ from dataset import FWIDataset
 from scheduler import WarmupMultiStepLR
 import transforms as T
 
+from rich.console import Console
+from rich.traceback import install
+from rich.progress import Progress, BarColumn, TimeRemainingColumn
+from rich.table import Table
+
+# Setup rich
+console = Console()
+install()
+
 step = 0
+
 
 def train_one_epoch(
         model,
@@ -47,97 +56,107 @@ def train_one_epoch(
         writer
 ):
     """
-    Train the model for one epoch.
+    Train one epoch
 
     Args:
-        model (torch.nn.Module): The model to train.
-        criterion (torch.nn.Module): The loss function.
-        optimizer (torch.optim.Optimizer): The optimizer.
-        lr_scheduler (torch.optim.lr_scheduler._LRScheduler): The scheduler.
-        dataloader (torch.utils.data.DataLoader): The data loader.
-        device (torch.device): The device to use.
-        epoch (int): The current epoch.
-        print_freq (int): The print frequency.
-        writer (SummaryWriter): The tensorboard writer.
+        model: model
+        criterion: loss function
+        optimizer: optimizer
+        lr_scheduler: learning rate scheduler
+        dataloader: data loader
+        device: device
+        epoch: epoch number
+        print_freq: print frequency
+        writer: tensorboard
 
     Returns:
-        float: The loss.
+        None
     """
     global step
+
     model.train()
 
-    # Logger setup
     metric_logger = utils.MetricLogger(delimiter='  ')
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value}'))
     metric_logger.add_meter('samples/s', utils.SmoothedValue(window_size=10, fmt='{value:.3f}'))
-    header = 'Epoch: [{}]'.format(epoch)
+    header = f'[bold green]Epoch: [{epoch}][/bold green]'
 
-    for data, label in metric_logger.log_every(dataloader, print_freq, header):
-        start_time = time.time()
-        optimizer.zero_grad()
-        data, label = data.to(device), label.to(device)
-        output = model(data)
-        loss, loss_g1v, loss_g2v = criterion(output, label)
-        loss.backward()
-        optimizer.step()
-        print(f"loss: {loss.item()}, loss_g1v: {loss_g1v.item()}, loss_g2v: {loss_g2v.item()}")
-        loss_val = loss.item()
-        loss_g1v_val = loss_g1v.item()
-        loss_g2v_val = loss_g2v.item()
-        batch_size = data.shape[0]
-        metric_logger.update(loss=loss_val, loss_g1v=loss_g1v_val, 
-            loss_g2v=loss_g2v_val, lr=optimizer.param_groups[0]['lr'])
-        metric_logger.meters['samples/s'].update(batch_size / (time.time() - start_time))
-        if writer:
-            writer.add_scalar('loss', loss_val, step)
-            writer.add_scalar('loss_g1v', loss_g1v_val, step)
-            writer.add_scalar('loss_g2v', loss_g2v_val, step)
-        step += 1
-        lr_scheduler.step()
+    with Progress(console=console) as progress:
+        task = progress.add_task(header, total=len(dataloader))
 
+        for data, label in metric_logger.log_every(dataloader, print_freq, header):
+            start_time = time.time()
+            optimizer.zero_grad()
+            data, label = data.to(device), label.to(device)
+            output = model(data)
+            loss, loss_g1v, loss_g2v = criterion(output, label)
+            loss.backward()
+            optimizer.step()
+            loss_val = loss.item()
+            loss_g1v_val = loss_g1v.item()
+            loss_g2v_val = loss_g2v.item()
+            batch_size = data.shape[0]
+            metric_logger.update(loss=loss_val, loss_g1v=loss_g1v_val,
+                                 loss_g2v=loss_g2v_val, lr=optimizer.param_groups[0]['lr'])
+            metric_logger.meters['samples/s'].update(batch_size / (time.time() - start_time))
+            if writer:
+                writer.add_scalar('loss', loss_val, step)
+                writer.add_scalar('loss_g1v', loss_g1v_val, step)
+                writer.add_scalar('loss_g2v', loss_g2v_val, step)
+            step += 1
+            lr_scheduler.step()
+            progress.update(task, advance=1)
+        # end for
+    # end with
+# end train_one_epoch
 
 def evaluate(model, criterion, dataloader, device, writer):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter='  ')
-    header = 'Test:'
-    with torch.no_grad():
-        for data, label in metric_logger.log_every(dataloader, 20, header):
-            data = data.to(device, non_blocking=True)
-            label = label.to(device, non_blocking=True)
-            output = model(data)
-            loss, loss_g1v, loss_g2v = criterion(output, label)
-            metric_logger.update(loss=loss.item(), 
-                loss_g1v=loss_g1v.item(), 
-                loss_g2v=loss_g2v.item())
+    header = '[bold blue]Evaluation[/bold blue]'
 
-    # Gather the stats from all processes
+    with Progress(console=console) as progress:
+        task = progress.add_task(header, total=len(dataloader))
+
+        with torch.no_grad():
+            for data, label in metric_logger.log_every(dataloader, 20, header):
+                data = data.to(device, non_blocking=True)
+                label = label.to(device, non_blocking=True)
+                output = model(data)
+                loss, loss_g1v, loss_g2v = criterion(output, label)
+                metric_logger.update(loss=loss.item(),
+                                     loss_g1v=loss_g1v.item(),
+                                     loss_g2v=loss_g2v.item())
+
+                progress.update(task, advance=1)
+
     metric_logger.synchronize_between_processes()
-    print(' * Loss {loss.global_avg:.8f}\n'.format(loss=metric_logger.loss))
+    console.log(f"[bold yellow]Final Loss: {metric_logger.loss.global_avg:.8f}[/bold yellow]")
+
     if writer:
         writer.add_scalar('loss', metric_logger.loss.global_avg, step)
         writer.add_scalar('loss_g1v', metric_logger.loss_g1v.global_avg, step)
         writer.add_scalar('loss_g2v', metric_logger.loss_g2v.global_avg, step)
+
     return metric_logger.loss.global_avg
 
 
 def main(args):
     global step
 
-    print(args)
-    print('torch version: ', torch.__version__)
-    print('torchvision version: ', torchvision.__version__)
+    console.log(args)
+    console.log(f'[bold cyan]Torch version:[/bold cyan] {torch.__version__}')
+    console.log(f'[bold cyan]Torchvision version:[/bold cyan] {torchvision.__version__}')
 
-    utils.mkdir(args.output_path) # create folder to store checkpoints
-    utils.init_distributed_mode(args) # distributed mode initialization
+    utils.mkdir(args.output_path)
+    utils.init_distributed_mode(args)
 
-    # Set up tensorboard summary writer
     train_writer, val_writer = None, None
     if args.tensorboard:
-        utils.mkdir(args.log_path) # create folder to store tensorboard logs
+        utils.mkdir(args.log_path)
         if not args.distributed or (args.rank == 0) and (args.local_rank == 0):
             train_writer = SummaryWriter(os.path.join(args.output_path, 'logs', 'train'))
             val_writer = SummaryWriter(os.path.join(args.output_path, 'logs', 'val'))
-                                                                 
 
     device = torch.device(args.device)
     torch.backends.cudnn.benchmark = True
@@ -146,16 +165,14 @@ def main(args):
         try:
             ctx = json.load(f)[args.dataset]
         except KeyError:
-            print('Unsupported dataset.')
+            console.log('[bold red]Unsupported dataset.[/bold red]')
             sys.exit()
 
     if args.file_size is not None:
         ctx['file_size'] = args.file_size
 
-    # Create dataset and dataloader
-    print('Loading data')
-    print('Loading training data')
-        
+    console.log('[bold green]Loading training data...[/bold green]')
+
     # Normalize data and label to [-1, 1]
     transform_data = Compose([
         T.LogTransform(k=args.k),
@@ -164,6 +181,7 @@ def main(args):
     transform_label = Compose([
         T.MinMaxNormalize(ctx['label_min'], ctx['label_max'])
     ])
+
     if args.train_anno[-3:] == 'txt':
         dataset_train = FWIDataset(
             args.train_anno,
@@ -176,7 +194,8 @@ def main(args):
     else:
         dataset_train = torch.load(args.train_anno)
 
-    print('Loading validation data')
+    console.log('[bold green]Loading validation data...[/bold green]')
+
     if args.val_anno[-3:] == 'txt':
         dataset_valid = FWIDataset(
             args.val_anno,
@@ -189,7 +208,8 @@ def main(args):
     else:
         dataset_valid = torch.load(args.val_anno)
 
-    print('Creating data loaders')
+    console.log('[bold green]Creating data loaders...[/bold green]')
+
     if args.distributed:
         train_sampler = DistributedSampler(dataset_train, shuffle=True)
         valid_sampler = DistributedSampler(dataset_valid, shuffle=True)
@@ -207,18 +227,19 @@ def main(args):
         sampler=valid_sampler, num_workers=args.workers,
         pin_memory=True, collate_fn=default_collate)
 
-    print('Creating model')
+    console.log('[bold cyan]Creating model...[/bold cyan]')
+
     if args.model not in network.model_dict:
-        print('Unsupported model.')
+        console.log('[red]Unsupported model.[/red]')
         sys.exit()
     # end if
 
-    model = network.model_dict[args.model](upsample_mode=args.up_mode, 
-        sample_spatial=args.sample_spatial, sample_temporal=args.sample_temporal).to(device)
+    model = network.model_dict[args.model](upsample_mode=args.up_mode,
+                                           sample_spatial=args.sample_spatial,
+                                           sample_temporal=args.sample_temporal).to(device)
 
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    # end if
 
     # Define loss function
     l1loss = nn.L1Loss()
@@ -262,18 +283,21 @@ def main(args):
         lr_scheduler.milestones=lr_milestones
     # end if args.resume
 
-    print('Start training')
+    console.log('[bold magenta]Starting training...[/bold magenta]')
     start_time = time.time()
     best_loss = 10
-    chp=1 
+    chp = 1
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        train_one_epoch(model, criterion, optimizer, lr_scheduler, dataloader_train,
-                        device, epoch, args.print_freq, train_writer)
-        
-        loss = evaluate(model, criterion, dataloader_valid, device, val_writer)
-        
+
+        train_one_epoch(model, criterion,
+                        optimizer, lr_scheduler, dataloader_train, device, epoch, args.print_freq, train_writer)
+
+        loss = evaluate(model, criterion, dataloader_valid, device,
+                        val_writer)
+
         checkpoint = {
             'model': model_without_ddp.state_dict(),
             'optimizer': optimizer.state_dict(),
@@ -281,30 +305,33 @@ def main(args):
             'epoch': epoch,
             'step': step,
             'args': args}
+
         # Save checkpoint per epoch
         if loss < best_loss:
             utils.save_on_master(
-            checkpoint,
-            os.path.join(args.output_path, 'checkpoint.pth'))
-            print('saving checkpoint at epoch: ', epoch)
+                checkpoint,
+                os.path.join(args.output_path, 'checkpoint.pth'))
+            console.log(f'[green]Saving checkpoint at epoch: {epoch}')
             chp = epoch
             best_loss = loss
         # end if
 
         # Save checkpoint every epoch block
-        print('current best loss: ', best_loss)
-        print('current best epoch: ', chp)
+        console.log(f"Current best loss: {best_loss}")
+        console.log(f"Current loss: {chp}")
+
         if args.output_path and (epoch + 1) % args.epoch_block == 0:
+            checkpoint_path = os.path.join(args.output_path, 'model_{}.pth'.format(epoch + 1))
+            console.log(f"[bold yellow]Saving checkpoint at epoch: {epoch + 1} in {checkpoint_path}[/bold yellow]")
             utils.save_on_master(
                 checkpoint,
-                os.path.join(args.output_path, 'model_{}.pth'.format(epoch + 1))
+                checkpoint_path
             )
         # end if
     # end for epoch
 
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+    # Log training time
+    console.log(f'[bold cyan]Total training time:[/bold cyan] {str(datetime.timedelta(seconds=int(time.time() - start_time)))}')
 # end main
 
 
@@ -321,14 +348,16 @@ def parse_args():
     parser.add_argument('-ap', '--anno-path', default='split_files', help='annotation files location')
     parser.add_argument('-t', '--train-anno', default='flatfault_b_train_invnet.txt', help='name of train anno')
     parser.add_argument('-v', '--val-anno', default='flatfault_b_val_invnet.txt', help='name of val anno')
-    parser.add_argument('-o', '--output-path', default='Invnet_models', help='path to parent folder to save checkpoints')
+    parser.add_argument('-o', '--output-path', default='Invnet_models',
+                        help='path to parent folder to save checkpoints')
     parser.add_argument('-l', '--log-path', default='Invnet_models', help='path to parent folder to save logs')
     parser.add_argument('-n', '--save-name', default='fcn_l1loss_ffb', help='folder name for this experiment')
     parser.add_argument('-s', '--suffix', type=str, default=None, help='subfolder name for this run')
 
     # Model related
     parser.add_argument('-m', '--model', type=str, help='inverse model name')
-    parser.add_argument('-um', '--up-mode', default=None, help='upsampling layer mode such as "nearest", "bicubic", etc.')
+    parser.add_argument('-um', '--up-mode', default=None,
+                        help='upsampling layer mode such as "nearest", "bicubic", etc.')
     parser.add_argument('-ss', '--sample-spatial', type=float, default=1.0, help='spatial sampling ratio')
     parser.add_argument('-st', '--sample-temporal', type=int, default=1, help='temporal sampling ratio')
     # Training related
@@ -336,9 +365,9 @@ def parse_args():
     parser.add_argument('--lr', default=0.0001, type=float, help='initial learning rate')
     parser.add_argument('-lm', '--lr-milestones', nargs='+', default=[], type=int, help='decrease lr on milestones')
     parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
-    parser.add_argument('--weight-decay', default=1e-4 , type=float, help='weight decay (default: 1e-4)')
+    parser.add_argument('--weight-decay', default=1e-4, type=float, help='weight decay (default: 1e-4)')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
-    parser.add_argument('--lr-warmup-epochs', default=0, type=int, help='number of warmup epochs')   
+    parser.add_argument('--lr-warmup-epochs', default=0, type=int, help='number of warmup epochs')
     parser.add_argument('-eb', '--epoch_block', type=int, default=40, help='epochs in a saved block')
     parser.add_argument('-nb', '--num_block', type=int, default=3, help='number of saved block')
     parser.add_argument('-j', '--workers', default=16, type=int, help='number of data loading workers (default: 16)')
@@ -350,7 +379,7 @@ def parse_args():
     # Loss related
     parser.add_argument('-g1v', '--lambda_g1v', type=float, default=1.0)
     parser.add_argument('-g2v', '--lambda_g2v', type=float, default=1.0)
-    
+
     # Distributed training related
     parser.add_argument('--sync-bn', action='store_true', help='Use sync batch norm')
     parser.add_argument('--world-size', default=1, type=int, help='number of distributed processes')
@@ -365,7 +394,7 @@ def parse_args():
     args.log_path = os.path.join(args.log_path, args.save_name, args.suffix or '')
     args.train_anno = os.path.join(args.anno_path, args.train_anno)
     args.val_anno = os.path.join(args.anno_path, args.val_anno)
-    
+
     args.epochs = args.epoch_block * args.num_block
 
     if args.resume:
